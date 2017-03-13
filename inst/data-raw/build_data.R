@@ -20,6 +20,7 @@ tourney_detailed_results <- fread('inst/kaggle_data/TourneyDetailedResults.csv')
 tourney_seeds <- fread('inst/kaggle_data/TourneySeeds.csv')
 tourney_slots <- fread('inst/kaggle_data/TourneySlots.csv')
 
+#sample_submission <- fread('inst/kaggle_data/SeedBenchmark.csv') # Not out yet
 sample_submission <- fread('inst/kaggle_data/SampleSubmission.csv')
 
 names(seasons) <- tolower(names(seasons))
@@ -91,7 +92,7 @@ slot_print_positions <- fread('inst/kaggle_data/slot_print_positions.csv')
 ##########################################
 
 #Build the base data-structure linking slots together
-slot_map <- reshape2::melt(tourney_slots, id.vars=c('season', 'slot'), value.name='prior_slot')
+slot_map <- reshape2::melt(tourney_slots, id.vars=c('season', 'slot', 'host', 'host_lat', 'host_lng'), value.name='prior_slot')
 slot_map <- slot_map[,list(season, slot=slot, prior_slot)]
 tourny_tree <- slot_map[,list(season, seed=prior_slot, slot1=slot, slot2=prior_slot)]
 
