@@ -4,6 +4,9 @@ rm(list=ls(all=TRUE))
 library(data.table)
 library(devtools)
 library(geosphere)
+library(stringi)
+
+THIS_YEAR <- 2017
 
 ##########################################
 # Base Kaggle Data
@@ -22,6 +25,7 @@ tourney_slots <- fread('inst/kaggle_data/TourneySlots.csv')
 
 #sample_submission <- fread('inst/kaggle_data/SeedBenchmark.csv') # Not out yet
 sample_submission <- fread('inst/kaggle_data/SampleSubmission.csv')
+setnames(sample_submission, tolower(names(sample_submission)))
 
 names(seasons) <- tolower(names(seasons))
 names(teams) <- tolower(names(teams))
@@ -31,7 +35,6 @@ names(tourney_compact_results) <- tolower(names(tourney_compact_results))
 names(tourney_detailed_results) <- tolower(names(tourney_detailed_results))
 names(tourney_seeds) <- tolower(names(tourney_seeds))
 names(tourney_slots) <- tolower(names(tourney_slots))
-names(sample_submission) <- tolower(names(sample_submission))
 
 ##########################################
 # Extra data
@@ -46,7 +49,7 @@ geo_tourney <- fread('inst/kaggle_data/TourneyGeog.csv')[,list(season, slot, hos
 setnames(geo_tourney, c('lat', 'lng'), c('host_lat', 'host_lng'))
 tourney_slots <- merge(tourney_slots, geo_tourney, by=c('season', 'slot'), all.x=TRUE)
 
-#Spreads (MISSING 2016!)
+#Spreads (MISSING 2016 and 2017!)
 spreads <- fread('inst/kaggle_data/covers_ncaab_data_mt.csv')
 
 #ADD: Massey Ordinals
@@ -202,6 +205,70 @@ tourney_compact_results <- merge(
 )
 
 setcolorder(tourney_compact_results, names(regular_season_compact_results))
+
+##########################################
+# Replace sample sub with a simple seed diff benchmark
+##########################################
+
+#Wrangle the data, ugh
+tmp_dat <- tourney_compact_results[,list(season, wteam, lteam, wscore, lscore)]
+tmp_dat[,id1 := stri_paste(season, wteam, lteam, sep='_')]
+tmp_dat[,id2 := stri_paste(season, lteam, wteam, sep='_')]
+tmp_dat[wteam < lteam, id := id1]
+tmp_dat[wteam > lteam, id := id2]
+tmp_dat[,c('id1', 'id2') := NULL]
+rename = c('team', 'score')
+oldnames <- c(paste0('w', rename), paste0('l', rename))
+newnames <- c(paste0(rename, '_1'), paste0(rename, '_2'))
+setnames(tmp_dat, oldnames, newnames)
+
+ids <- stri_split_fixed(sample_submission[['id']], '_')
+sample_submission[,pred := NULL]
+sample_submission[, season := as.integer(sapply(ids, '[[', 1))]
+sample_submission[, team_1 := as.integer(sapply(ids, '[[', 2))]
+sample_submission[, team_2 := as.integer(sapply(ids, '[[', 3))]
+
+tmp_dat <- rbind(tmp_dat, sample_submission, fill=T)
+sample_submission[,c('season', 'team_1', 'team_2') := NULL]
+
+team1 <- tmp_dat[,list(
+  id, season,
+  team_1, team_2,
+  score_1, score_2)]
+
+team2 <- tmp_dat[,list(
+  id, season,
+  team_1=team_2, team_2=team_1,
+  score_1=score_2, score_2=score_1)]
+
+tmp_dat <- rbindlist(list(team1, team2))
+rm(team1, team2)
+gc(reset=TRUE)
+
+#Add seeds
+tmp_dat_2 <- all_slots[,list(season, team_1, team_2, seed_1, seed_2)]
+tmp_dat_2[, seed_1 := as.integer(gsub('[[:alpha:]]', '', seed_1))]
+tmp_dat_2[, seed_2 := as.integer(gsub('[[:alpha:]]', '', seed_2))]
+tmp_dat_2[,seed_diff := seed_1 - seed_2]
+tmp_dat_2[,c('seed_1', 'seed_2') := NULL]
+tmp_dat <- merge(tmp_dat, tmp_dat_2, by=c('season', 'team_1', 'team_2'))
+
+#Model and Predict
+tmp_dat[,won := as.integer(score_1 > score_2)]
+model <- tmp_dat[!is.na(won), glm(won ~ 0 + seed_diff, family='binomial')]
+tmp_dat <- tmp_dat[,pred := predict(model, tmp_dat, type='response')]
+setkeyv(tmp_dat, 'id')
+# summary(tmp_dat[,sum(pred),by='id'])
+# summary(tmp_dat[,sum(won),by='id'])
+# summary(tmp_dat[,sum(seed_diff),by='id'])
+
+#Add to sample sub
+#tmp_dat <- tmp_dat[,id := paste(season, team_1, team_2, sep='_')]
+tmp_dat <- tmp_dat[team_1 < team_2 & season == THIS_YEAR,]
+tmp_dat <- tmp_dat[,list(id, pred)]
+sample_submission <- merge(sample_submission, tmp_dat, by='id', all.x=T)
+
+write.csv(sample_submission, 'inst/kaggle_data/seed_benchmark.csv', row.names=F)
 
 ##########################################
 # Save data
